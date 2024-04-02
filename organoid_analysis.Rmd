@@ -1,0 +1,204 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-04-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{R}
+library(Biobase)
+library(knitr)
+library(reshape2)
+library(ggplot2)
+# library(HSMMSingleCell)
+library(monocle)
+library(RColorBrewer)
+library(Seurat)
+library(colorRamps)
+library(pheatmap)
+library(stringr)
+library(GSVA)
+library(ComplexHeatmap)
+library(dendsort)
+convertMouseGeneList <- function(x){
+  require("biomaRt")
+  human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+  genesV2 = getLDS(attributes = c("hgnc_symbol"),
+                   filters = "hgnc_symbol",
+                   values = x , martL = mouse,
+                   attributesL = c("mgi_symbol"),
+                   mart = human, uniqueRows=T)
+  
+  return(genesV2)
+   
+}
+# g2m.genes=convertMouseGeneList(cc.genes.updated.2019$g2m.genes)
+# s.genes=convertMouseGeneList(cc.genes.updated.2019$s.genes)
+load("E:/databases/cellcyclegene.RData")
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))#Paired
+my_comparison=function(p=compare_result){
+  a=p[p$p<0.05,]
+  result=list()
+  length(result)=nrow(a)
+  for(i in 1:nrow(a)){
+    result[[i]]=c(a$group1[i],a$group2[i])
+  }
+  return(result)
+  
+}
+```
+```{r}
+gzfile=list.files(path = 'E:/yuanlei/20210614_orgnoid/count/',pattern = '.tsv.gz')
+# gzfile=gzfile[grep("FVBB",gzfile,invert = T)]
+countdata=list()
+for(i in gzfile){
+  print(i)
+  countdata[[gsub('.count.*','',i)]]=read.table(paste0('E:/yuanlei/20210614_orgnoid/count/',i),header = T)
+  
+}
+
+barcode=read.table('E:/singlecell/all_count/Barcode.txt',header = F)
+allbarcode=paste0(rep(c("AA","TT","CC","GG"),each=96),barcode$V2)
+
+for(i in names(countdata)){
+  countdata[[i]]=countdata[[i]][,c('gene',intersect(allbarcode,colnames(countdata[[i]])))]
+  
+}
+
+for(i in names(countdata)){
+  colnames(countdata[[i]])=c('gene',paste(i,colnames(countdata[[i]])[-1],sep = '_'))
+  
+  
+}
+lapply(countdata,dim)
+
+data=countdata[[1]]
+for(i in 2:length(gzfile)){
+  
+  data=merge(data,countdata[[i]],by='gene',all=T)
+  
+}
+
+rownames(data)=data$gene
+data=data[,-1]
+data[is.na(data)]=0
+data=as(as.matrix(data),'sparseMatrix')
+```
+
+```{r}
+dataname0="2021614_org"
+seuratData <- CreateSeuratObject(data) 
+seuratData@meta.data$month_version=seuratData@meta.data$orig.ident
+seuratData@meta.data$month=substr(seuratData@meta.data$month_version,1,4)
+
+seuratData[["percent.mt"]] = colSums(as.matrix(seuratData@assays$RNA@counts[grep('^mt-',rownames(seuratData@assays$RNA@counts)),]))/seuratData$nCount_RNA
+seuratData[["percent.ercc"]] = colSums(as.matrix(seuratData@assays$RNA@counts[grep('^ERCC-',rownames(seuratData@assays$RNA@counts)),]))/seuratData$nCount_RNA
+p1=VlnPlot(seuratData, c("nCount_RNA", "nFeature_RNA"), pt.size = 0.1, ncol = 2, group.by = "month")
+p2=VlnPlot(seuratData, c("nCount_RNA", "nFeature_RNA"), pt.size = 0.1, ncol = 2, group.by = "month_version")+geom_hline(yintercept = 1000)
+p3=VlnPlot(seuratData, c('percent.mt','percent.ercc'), pt.size = 0.1, ncol = 2, group.by = "month")
+p4=VlnPlot(seuratData, c('percent.mt','percent.ercc'), pt.size = 0.1, ncol = 2, group.by = "month_version")
+
+seuratData <- subset(seuratData, subset = nFeature_RNA > 1000& percent.mt < 0.05 & percent.ercc<0.1)
+p5=VlnPlot(seuratData, c("nCount_RNA", "nFeature_RNA"), pt.size = 0.1, ncol = 2, group.by = "month")
+p6=VlnPlot(seuratData, c("nCount_RNA", "nFeature_RNA"), pt.size = 0.1, ncol = 2, group.by = "month_version")
+p7=VlnPlot(seuratData, c('percent.mt','percent.ercc'), pt.size = 0.1, ncol = 2, group.by = "month")
+p8=VlnPlot(seuratData, c('percent.mt','percent.ercc'), pt.size = 0.1, ncol = 2, group.by = "month_version")
+pdf(paste0(dataname0,"gene_count.pdf"))
+print(p1)
+print(p2)
+print(p3)
+print(p4)
+print(p5)
+print(p6)
+print(p7)
+print(p8)
+dev.off()
+
+p2=ggplot(seuratData@meta.data,aes(x=month_version,y=nCount_RNA,col=month))+geom_boxplot()+geom_jitter(size=0.1)+labs(title = "nCount_RNA")+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5,hjust = 1),plot.title = element_text(hjust=0.5),legend.position = "none")
+p2.1=ggplot(seuratData@meta.data,aes(x=month_version,y=nFeature_RNA,col=month))+geom_boxplot()+geom_jitter(size=0.1)+labs(title = "nFeature_RNA")+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5,hjust = 1),plot.title = element_text(hjust=0.5),legend.position = "none")
+
+p4=ggplot(seuratData@meta.data,aes(x=month_version,y=percent.mt,col=month))+geom_boxplot()+geom_jitter(size=0.1)+labs(title = "percent.mt")+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5,hjust = 1),plot.title = element_text(hjust=0.5),legend.position = "none")
+p4.1=ggplot(seuratData@meta.data,aes(x=month_version,y=percent.ercc,col=month))+geom_boxplot()+geom_jitter(size=0.1)+labs(title = "percent.ercc")+
+  theme_bw()+theme(axis.text.x = element_text(angle=90,vjust=0.5,hjust = 1),plot.title = element_text(hjust=0.5),legend.position = "none")
+pdf(paste0(dataname0,"gene_count2.pdf"))
+print(p2+p2.1)
+print(p4+p4.1)
+dev.off()
+```
+
+```{r}
+seuratData=seuratData[grep("ERCC-",rownames(seuratData),invert = T),]
+seuratData=NormalizeData(object = seuratData, normalization.method = "LogNormalize", scale.factor = 10000)
+seuratData <- CellCycleScoring(seuratData, s.features = sapply(cc.genes.updated.2019$s.genes,first2big), g2m.features =sapply(cc.genes.updated.2019$g2m.genes,first2big))#, set.ident = TRUE)
+
+#https://satijalab.org/seurat/v3.1/cell_cycle_vignette.html 设置cell cycle的校正 seurat使用的是score,science paper中使用phase
+seuratData <- FindVariableFeatures(seuratData, selection.method = "vst", x.cutoff=c(0.01,Inf),y.cutoff=0.01,nfeatures = 2000)
+seuratData <- ScaleData(object = seuratData, vars.to.regress = c("S.Score", "G2M.Score",'percent.mt','percent.ercc','nFeature_RNA'))
+
+#Dimension reduction
+seuratData <- RunPCA(seuratData, npcs = 70, verbose = FALSE,features =VariableFeatures(seuratData) )
+# ElbowPlot(seuratData, ndims = 70)
+
+# seuratData=JackStraw(seuratData, num.replicate = 100,dims = 100)
+# seuratData <- ScoreJackStraw(seuratData, dims = 1:70)
+# JackStrawPlot(seuratData, dims = 1:50)
+
+# dims=which(seuratData@reductions$pca@jackstraw$overall.p.values[,2]>0.05)[1]-1
+dims=10
+seuratData <- RunTSNE(seuratData, dims = 1:dims, verbose = FALSE,check_duplicates = FALSE)
+seuratData <- FindNeighbors(seuratData,reduction = 'pca', verbose = FALSE, dims = 1:dims)
+seuratData <- FindClusters(seuratData, algorithm = 1, random.seed = 256, resolution = 1)
+
+pdf(paste0(dataname0,"cluster.pdf"))
+DimPlot(seuratData,  reduction = "tsne", group.by = "seurat_clusters", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$seurat_clusters))))
+DimPlot(seuratData,  reduction = "tsne", group.by = "month", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$month))))
+DimPlot(seuratData,  reduction = "tsne", group.by = "month_version", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$month_version))))
+
+dev.off()
+table(seuratData@meta.data[,c("seurat_clusters","month")])
+table(seuratData@meta.data[,c("seurat_clusters","month_version")])
+```
+
+```{r}
+pdf(paste0(dataname0,"stromalexp.pdf"))
+genes_to_check=c("Pecam1","Ptprc","Lyve1","Col1a1")
+FeaturePlot(seuratData, genes_to_check, pt.size = 0.2, ncol = 2)+NoLegend()
+VlnPlot(object = seuratData, features= genes_to_check,pt.size = 0.2, ncol = 2)
+dev.off()
+```
+##rm endothelium, blood cell, stromal
+```{r}
+dataname0=paste0(dataname0,"rm_stromal")
+# seuratData=seuratData[,!seuratData@meta.data$seurat_clusters%in%c(11)]
+
+# keep1=apply(seuratData@assays$RNA@data[c("Pecam1","Ptprc","Lyve1"),],1,function(x){x<1})
+# keep2= seuratData@assays$RNA@data[c("Col1a1"),]<2
+# keep=cbind(keep1,keep2)
+# keep=apply(keep,1,sum)
+# seuratData=seuratData[,keep==4]
+keep=apply(seuratData@assays$RNA@data[c("Pecam1","Ptprc","Lyve1","Col1a1"),],1,function(x){x<0.1})
+keep=apply(keep,1,sum)
+seuratData=seuratData[,keep==4]
+seuratData <- RunPCA(seuratData, npcs = 70, verbose = FALSE,features =VariableFeatures(seuratData) )
+
+dims=10
+seuratData <- RunTSNE(seuratData, dims = 1:dims, verbose = FALSE,check_duplicates = FALSE)
+seuratData <- FindNeighbors(seuratData,reduction = 'pca', verbose = FALSE, dims = 1:dims)
+seuratData <- FindClusters(seuratData, algorithm = 1, random.seed = 256, resolution = 0.5)#method = "igraph",
+
+pdf(paste0(dataname0,"cluster_rmstromal.pdf"))
+DimPlot(seuratData,  reduction = "tsne", group.by = "seurat_clusters", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$seurat_clusters))))
+DimPlot(seuratData,  reduction = "tsne", group.by = "month", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$month))))
+DimPlot(seuratData,  reduction = "tsne", group.by = "month_version", label = TRUE)+scale_fill_manual(values = getPalette(length(unique(seuratData@meta.data$month_version))))
+
+dev.off()
+save(seuratData,file = paste0(dataname0,"seuratDatarmcol1a0.1.RData"))
+saveRDS(seuratData, file = paste0(dataname0,"seuratDatarmcol1a0.1.rds"))
+```
